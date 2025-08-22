@@ -28,6 +28,8 @@ from utils.database import (
     func
 )
 
+nltk.download('punkt_tab')
+
 # Check authentication
 if not check_authentication():
     st.error("Please login from the main page to access this application.")
