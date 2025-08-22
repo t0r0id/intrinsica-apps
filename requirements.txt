@@ -1,0 +1,37 @@
+# Combined requirements for Intrinsica Apps
+# Multi-page Streamlit application
+
+# Core Streamlit and web framework
+streamlit>=1.28.0
+
+# Database and ORM
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+python-dotenv>=1.0.0
+
+# Data processing and analysis
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Visualization
+plotly>=5.17.0
+
+# Search and NLP
+rank-bm25>=0.2.0
+nltk>=3.8
+
+# Scientific computing
+scipy
+
+# Note: Additional data files required for Competitor Identification:
+# - data/business_units_with_embeddings.pkl
+# - data/bm25_index.pkl
+# These should be generated using the index_business_units.py script
+
+# Environment variables required for Radar Tracker:
+# Create a .env file with:
+# DB_USER=your_db_user
+# DB_PASSWORD=your_db_password
+# DB_HOST=your_db_host
+# DB_PORT=your_db_port
+# DB_NAME=your_db_name
