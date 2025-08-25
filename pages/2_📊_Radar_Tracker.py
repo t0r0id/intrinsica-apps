@@ -28,7 +28,7 @@ from utils.database import (
     func
 )
 
-nltk.data.path.append("./data/nltk")
+
 
 # Check authentication
 if not check_authentication():
@@ -47,6 +47,7 @@ st.set_page_config(
 @st.cache_resource
 def download_nltk_data():
     """Download required NLTK data"""
+    nltk.data.path.append("./data/nltk")
     try:
         nltk.data.find('tokenizers/punkt')
         nltk.data.find('corpora/stopwords')
