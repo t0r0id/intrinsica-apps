@@ -32,14 +32,14 @@ def load_indices(data_dir: str):
     data_path = Path(data_dir)
     
     # Try to load combined data file first (pickle for speed, then JSON)
-    combined_pkl_path = data_path / "business_units_with_embeddings.pkl"
-    combined_json_path = data_path / "business_units_with_embeddings.json"
+    combined_pkl_path = data_path / "all_documents_with_embeddings.pkl"
+    combined_json_path = data_path / "all_documents_with_embeddings.json"
     
     combined_path = combined_pkl_path if combined_pkl_path.exists() else combined_json_path
     
     if not combined_path.exists():
         st.error("Combined data file not found!")
-        st.error("Please re-run the indexing script: python index_business_units.py --full")
+        st.error("Please re-run the indexing script: python index_all_documents.py --full")
         st.stop()
     
     # Load combined data
@@ -51,29 +51,34 @@ def load_indices(data_dir: str):
         with open(combined_path, 'r') as f:
             combined_data = json.load(f)
     
-    # Extract business units, embeddings, and tokenized texts
-    business_units = []
+    # Extract documents, embeddings, and tokenized texts
+    all_documents = []
     embeddings_list = []
     tokenized_texts = []
     
     for entry in combined_data:
-        # Extract business unit info (excluding embedding and tokenized_text)
-        unit = {k: v for k, v in entry.items() 
+        # Extract document info (excluding embedding and tokenized_text)
+        doc = {k: v for k, v in entry.items() 
                if k not in ['embedding', 'tokenized_text']}
-        business_units.append(unit)
+        
+        # Set default importance weight for 10K documents if missing
+        if doc.get('document_type') == '10k' and doc.get('importance_weight') is None:
+            doc['importance_weight'] = 100
+            
+        all_documents.append(doc)
         
         # Extract embedding
         if entry.get('embedding'):
             embeddings_list.append(entry['embedding'])
         else:
-            st.error(f"Missing embedding for unit: {unit.get('name', 'Unknown')}")
+            st.error(f"Missing embedding for document: {doc.get('name', 'Unknown')}")
             st.stop()
         
         # Extract tokenized text
         if entry.get('tokenized_text'):
             tokenized_texts.append(entry['tokenized_text'])
         else:
-            st.error(f"Missing tokenized text for unit: {unit.get('name', 'Unknown')}")
+            st.error(f"Missing tokenized text for document: {doc.get('name', 'Unknown')}")
             st.stop()
     
     # Convert embeddings to numpy array
@@ -83,27 +88,29 @@ def load_indices(data_dir: str):
     bm25_path = data_path / "bm25_index.pkl"
     if not bm25_path.exists():
         st.error("BM25 index not found!")
-        st.error("Please re-run the indexing script: python index_business_units.py --full")
+        st.error("Please re-run the indexing script: python index_all_documents.py --full")
         st.stop()
     
     with open(bm25_path, 'rb') as f:
         bm25_index = pickle.load(f)
     
-    # Create processed_data dictionary for compatibility
+    # Create processed_data dictionary
     processed_data = {
-        'business_units': business_units,
+        'all_documents': all_documents,
+        'business_units': [doc for doc in all_documents if doc.get('document_type') == 'business_unit'],
+        '10k_documents': [doc for doc in all_documents if doc.get('document_type') == '10k'],
         'tokenized_texts': tokenized_texts
     }
     
     # Validate data consistency
-    if len(embeddings) != len(business_units):
-        st.error(f"Data inconsistency detected! Embeddings: {len(embeddings)}, Business Units: {len(business_units)}")
-        st.error("Please re-run the indexing script: python index_business_units.py --full")
+    if len(embeddings) != len(all_documents):
+        st.error(f"Data inconsistency detected! Embeddings: {len(embeddings)}, Documents: {len(all_documents)}")
+        st.error("Please re-run the indexing script: python index_all_documents.py --full")
         st.stop()
     
-    if len(tokenized_texts) != len(business_units):
-        st.error(f"Data inconsistency detected! Tokenized texts: {len(tokenized_texts)}, Business Units: {len(business_units)}")
-        st.error("Please re-run the indexing script: python index_business_units.py --full")
+    if len(tokenized_texts) != len(all_documents):
+        st.error(f"Data inconsistency detected! Tokenized texts: {len(tokenized_texts)}, Documents: {len(all_documents)}")
+        st.error("Please re-run the indexing script: python index_all_documents.py --full")
         st.stop()
     
     return embeddings, bm25_index, processed_data
@@ -155,20 +162,20 @@ def get_similarity_scores(
     bm25_index,
     tokenized_texts: list,
     bm25_weight: float = 0.7,
-    semantic_weight: float = 0.3
+    semantic_weight: float = 0.3,
+
 ) -> dict:
     """
-    Get similarity scores between source units and target units.
+    Get similarity scores between source documents and target documents.
     
     Args:
-        source_indices: List of indices for source units
-        target_indices: List of indices for target units
-        embeddings: Array of embeddings for all units
+        source_indices: List of indices for source documents
+        target_indices: List of indices for target documents
+        embeddings: Array of embeddings for all documents
         bm25_index: Pre-computed BM25 index
-        tokenized_texts: List of tokenized texts for all units
+        tokenized_texts: List of tokenized texts for all documents
         bm25_weight: Weight for BM25 scores
         semantic_weight: Weight for semantic scores
-        
     Returns:
         dict: Dictionary containing:
             - 'combined': List[List[float]] - Combined similarity scores
@@ -207,6 +214,7 @@ def get_similarity_scores(
         # Combine scores
         combined = (bm25_weight * target_bm25_norm) + (semantic_weight * target_semantic_norm)
         
+        
         combined_scores.append(combined.tolist())
         bm25_normalized_scores.append(target_bm25_norm.tolist())
         semantic_normalized_scores.append(target_semantic_norm.tolist())
@@ -222,16 +230,16 @@ def find_competitors(
     embeddings: np.ndarray,
     bm25_index,
     tokenized_texts: list,
-    business_units: list,
+    documents: list,
     bm25_weight: float = 0.7,
     semantic_weight: float = 0.3
 ) -> pd.DataFrame:
     """Find competitors using hybrid search."""
     # Get source company ticker
-    source_ticker = business_units[query_unit_idx]['ticker']
+    source_ticker = documents[query_unit_idx]['ticker']
     
     # Get target units (all units except those from source company)
-    target_indices = [i for i, unit in enumerate(business_units) if unit['ticker'] != source_ticker]
+    target_indices = [i for i, doc in enumerate(documents) if doc['ticker'] != source_ticker]
     
     # Get similarity scores using the new method
     # Source: [query_unit_idx], Targets: all units except source company
@@ -242,7 +250,7 @@ def find_competitors(
         bm25_index=bm25_index,
         tokenized_texts=tokenized_texts,
         bm25_weight=bm25_weight,
-        semantic_weight=semantic_weight
+        semantic_weight=semantic_weight,
     )
     
     # Extract scores for the single source unit (first and only row)
@@ -253,15 +261,15 @@ def find_competitors(
     # Create results dataframe
     results = []
     for idx, target_idx in enumerate(target_indices):
-        unit = business_units[target_idx]
+        doc = documents[target_idx]
         results.append({
-            'display_name': unit['display_name'],
-            'ticker': unit['ticker'],
-            'name': unit['name'],
+            'display_name': doc['display_name'],
+            'ticker': doc['ticker'],
+            'name': doc['name'],
             'bm25_score': bm25_norm[idx],
             'semantic_score': semantic_norm[idx],
             'final_score': final_scores[idx],
-            'details': unit['details']  # Store full details
+            'details': doc['details']  # Store full details
         })
     
     # Sort by final score
@@ -275,20 +283,25 @@ def find_company_competitors(
     embeddings: np.ndarray,
     bm25_index,
     tokenized_texts: list,
-    business_units: list,
+    documents: list,
+    document_type: str = 'business_unit',
     bm25_weight: float = 0.7,
     semantic_weight: float = 0.3
 ) -> pd.DataFrame:
     """Find company-level competitors by computing average best match scores."""
     
-    # Get all business units for source company
-    source_indices = [i for i, unit in enumerate(business_units) if unit['ticker'] == source_company]
+    # Filter documents by type
+    filtered_documents = [doc for doc in documents if doc.get('document_type') == document_type]
+    doc_to_original_idx = {i: documents.index(doc) for i, doc in enumerate(filtered_documents)}
+    
+    # Get all documents for source company
+    source_indices = [doc_to_original_idx[i] for i, doc in enumerate(filtered_documents) if doc['ticker'] == source_company]
     
     if not source_indices:
         return pd.DataFrame()
     
-    # Get all target units (excluding source company)
-    target_indices = [i for i, unit in enumerate(business_units) if unit['ticker'] != source_company]
+    # Get all target documents (excluding source company)
+    target_indices = [doc_to_original_idx[i] for i, doc in enumerate(filtered_documents) if doc['ticker'] != source_company]
     
     if not target_indices:
         return pd.DataFrame()
@@ -301,19 +314,19 @@ def find_company_competitors(
         bm25_index=bm25_index,
         tokenized_texts=tokenized_texts,
         bm25_weight=bm25_weight,
-        semantic_weight=semantic_weight
+        semantic_weight=semantic_weight,
     )
-    
+
     # Build company display name map and company-to-indices map
     company_display_map = {}
     company_indices_map = {}
     
     for idx in target_indices:
-        unit = business_units[idx]
-        ticker = unit['ticker']
+        doc = documents[idx]
+        ticker = doc['ticker']
         
         if ticker not in company_display_map:
-            company_display_map[ticker] = unit.get('company_display', ticker)
+            company_display_map[ticker] = doc.get('company_display', ticker)
             company_indices_map[ticker] = []
         
         # Map each target index to its position in target_indices list
@@ -324,6 +337,7 @@ def find_company_competitors(
     
     for target_company, target_positions in company_indices_map.items():
         best_matches = []
+        source_weights = []
         matched_pairs = []
         
         # For each source unit
@@ -342,18 +356,21 @@ def find_company_competitors(
                 best_target_idx = target_indices[best_target_position]
                 
                 best_matches.append(best_score)
+                source_weights.append(documents[src_idx].get('importance_weight', 100))
                 matched_pairs.append({
-                    'source': business_units[src_idx]['name'],
-                    'target': business_units[best_target_idx]['name'],
+                    'source': documents[src_idx]['name'],
+                    'target': documents[best_target_idx]['name'],
                     'score': best_score
                 })
         
-        # Calculate average score across all source units for this company
+        # Calculate weighted average score across all source units for this company
         if best_matches:
-            avg_score = np.mean(best_matches)
+            weights = np.array(source_weights)
+            scores = np.array(best_matches)
+            avg_score = np.sum(scores * weights) / np.sum(weights)
             
             # Get company business units info
-            target_units = [business_units[target_indices[pos]]['name'] for pos in target_positions]
+            target_units = [documents[target_indices[pos]]['name'] for pos in target_positions]
             
             company_scores.append({
                 'ticker': target_company,
@@ -410,15 +427,15 @@ def main():
     data_dir = Path(__file__).parent.parent / "data"
     
     # Check if index files exist (check for either pickle or json format)
-    combined_exists = (data_dir / "business_units_with_embeddings.pkl").exists() or \
-                     (data_dir / "business_units_with_embeddings.json").exists()
+    combined_exists = (data_dir / "all_documents_with_embeddings.pkl").exists() or \
+                     (data_dir / "all_documents_with_embeddings.json").exists()
     bm25_exists = (data_dir / "bm25_index.pkl").exists()
     
     if not combined_exists or not bm25_exists:
         st.error("❌ Index files not found!")
         missing = []
         if not combined_exists:
-            missing.append("business_units_with_embeddings.pkl/json")
+            missing.append("all_documents_with_embeddings.pkl/json")
         if not bm25_exists:
             missing.append("bm25_index.pkl")
         st.error(f"Missing files: {', '.join(missing)}")
@@ -429,10 +446,12 @@ def main():
     try:
         with st.spinner("Loading indices and data..."):
             embeddings, bm25_index, processed_data = load_indices(str(data_dir))
+            all_documents = processed_data['all_documents']
             business_units = processed_data['business_units']
+            raw_10k_docs = processed_data['10k_documents']
             tokenized_texts = processed_data['tokenized_texts']
         
-        st.success(f"✅ Loaded {len(business_units)} business units from {len(set([u['ticker'] for u in business_units]))} companies")
+        st.success(f"✅ Loaded {len(all_documents)} documents ({len(business_units)} business units, {len(raw_10k_docs)} 10K docs) from {len(set([d['ticker'] for d in all_documents]))} companies")
         
     except Exception as e:
         st.error(f"Error loading data: {str(e)}")
@@ -462,8 +481,11 @@ def main():
         # Get business units for selected company
         company_units = [unit for unit in business_units if unit['ticker'] == selected_company]
         
-        # Add "All Business Units" option
-        unit_options = {"📊 All Business Units (Company Average)": -1}
+        # Add "All Business Units" and "Raw 10K" options
+        unit_options = {
+            "📊 All Business Units (Company Average)": -1,
+            "📄 Raw 10K (Company Average)": -2
+        }
         unit_options.update({unit['display_name']: idx for idx, unit in enumerate(business_units) if unit['ticker'] == selected_company})
         
         if len(unit_options) > 1:  # Has units besides "All"
@@ -478,7 +500,7 @@ def main():
         with st.spinner("Searching for competitors..."):
             
             if selected_unit_idx == -1:
-                # Company-level search
+                # Company-level search using business units
                 st.info(f"Finding company-level competitors for {selected_company} based on average similarity across all business units...")
                 
                 results_df = find_company_competitors(
@@ -486,7 +508,31 @@ def main():
                     embeddings,
                     bm25_index,
                     tokenized_texts,
-                    business_units,
+                    all_documents,
+                    document_type='business_unit',
+                    bm25_weight=bm25_weight,
+                    semantic_weight=semantic_weight
+                )
+
+                # Get top N results
+                top_results = results_df.head(top_n)
+                
+                # Display results
+                st.header(f"🏆 Top Company Competitors for {selected_company}")
+                
+                # Create tabs for company view
+                tab1, tab2, tab3 = st.tabs(["📊 Bar Chart", "📋 Table View", "🔗 Match Details"])
+            elif selected_unit_idx == -2:
+                # Company-level search using Raw 10K documents
+                st.info(f"Finding company-level competitors for {selected_company} based on Raw 10K document similarity...")
+                
+                results_df = find_company_competitors(
+                    selected_company,
+                    embeddings,
+                    bm25_index,
+                    tokenized_texts,
+                    all_documents,
+                    document_type='10k',
                     bm25_weight=bm25_weight,
                     semantic_weight=semantic_weight
                 )
@@ -501,12 +547,27 @@ def main():
                 tab1, tab2, tab3 = st.tabs(["📊 Bar Chart", "📋 Table View", "🔗 Match Details"])
             else:
                 # Individual unit search
+                st.info(f"Finding competitors for specific business unit: {selected_unit_display}")
+                
+                # Find the actual document index from all_documents
+                selected_doc_idx = None
+                for i, doc in enumerate(all_documents):
+                    if (doc.get('ticker') == selected_company and 
+                        doc.get('display_name') == selected_unit_display and
+                        doc.get('document_type') == 'business_unit'):
+                        selected_doc_idx = i
+                        break
+                
+                if selected_doc_idx is None:
+                    st.error("Selected business unit not found in document index.")
+                    st.stop()
+                
                 results_df = find_competitors(
-                    selected_unit_idx,
+                    selected_doc_idx,
                     embeddings,
                     bm25_index,
                     tokenized_texts,
-                    business_units,
+                    [d for d in all_documents if d['document_type'] == 'business_unit'],
                     bm25_weight=bm25_weight,
                     semantic_weight=semantic_weight
                 )
@@ -520,11 +581,12 @@ def main():
                 # Create tabs for different views
                 tab1, tab2, tab3 = st.tabs(["📊 Bar Chart", "📋 Table View", "📝 Detailed View"])
             
+            # Tab content rendering (moved outside conditional blocks)
             with tab1:
                 # Create bar chart
                 fig = go.Figure()
                 
-                if selected_unit_idx == -1:
+                if selected_unit_idx == -1 or selected_unit_idx == -2:
                     # Company-level bar chart
                     fig.add_trace(go.Bar(
                         x=top_results['final_score'].values,
@@ -536,8 +598,9 @@ def main():
                         textposition='auto',
                     ))
                     
+                    chart_title = "Top Competitor Companies (10K)" if selected_unit_idx == -2 else "Top Competitor Companies (Business Units)"
                     fig.update_layout(
-                        title="Top Competitor Companies",
+                        title=chart_title,
                         xaxis_title="Average Similarity Score",
                         yaxis_title="Company",
                         height=400 + (len(top_results) * 30),
@@ -566,10 +629,10 @@ def main():
                     )
                 
                 st.plotly_chart(fig, use_container_width=True)
-            
+                
             with tab2:
                 # Display table
-                if selected_unit_idx == -1:
+                if selected_unit_idx == -1 or selected_unit_idx == -2:
                     # Company-level table
                     display_df = top_results[['display_name', 'final_score', 'num_matches', 'business_units']].copy()
                     display_df.columns = ['Company', 'Average Score', '# Matches', 'Sample Business Units']
@@ -584,9 +647,9 @@ def main():
                         display_df[col] = display_df[col].apply(lambda x: f"{x:.3f}")
                 
                 st.dataframe(display_df, use_container_width=True, hide_index=True)
-            
+                
             with tab3:
-                if selected_unit_idx == -1:
+                if selected_unit_idx == -1 or selected_unit_idx == -2:
                     # Company match details
                     for _, row in top_results.iterrows():
                         with st.expander(f"**{row['display_name']}** - Average Score: {row['final_score']:.3f}"):
@@ -619,7 +682,7 @@ def main():
                                 st.markdown(row['details'])
             
             # Score distribution - only show for unit-level search
-            if selected_unit_idx != -1:
+            if selected_unit_idx > -1:
                 with st.expander("📈 Score Distribution"):
                     col1, col2 = st.columns(2)
                     
