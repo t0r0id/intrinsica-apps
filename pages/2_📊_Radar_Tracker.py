@@ -28,7 +28,7 @@ from utils.database import (
     func
 )
 
-nltk.download('punkt_tab')
+nltk.data.path.append("./data/nltk")
 
 # Check authentication
 if not check_authentication():
@@ -195,6 +195,61 @@ def get_hypotheses(company_id: int, start_date: date, end_date: date) -> List[Di
     finally:
         session.close()
 
+@st.cache_data(ttl=300)
+def get_key_developments(company_id: int, start_date: date, end_date: date) -> List[Dict[str, Any]]:
+    """Fetch key developments for a company within date range"""
+    SessionLocal = get_database_connection()
+    session = SessionLocal()
+    
+    try:
+        query = (
+            session.query(
+                TranscriptKeyDevelopment.id,
+                TranscriptKeyDevelopment.subject,
+                TranscriptKeyDevelopment.title,
+                TranscriptKeyDevelopment.description,
+                TranscriptKeyDevelopment.category,
+                TranscriptKeyDevelopment.created_at,
+                Transcript.id.label('transcript_id'),
+                Transcript.published_date,
+                Transcript.title.label('transcript_title'),
+                Transcript.quarter
+            )
+            .join(ConferenceInsightsReport, TranscriptKeyDevelopment.conference_insights_report_id == ConferenceInsightsReport.id)
+            .join(Transcript, ConferenceInsightsReport.transcript_id == Transcript.id)
+            .join(Company, Transcript.company_id == Company.id)
+            .filter(
+                Company.id == company_id,
+                ConferenceInsightsReport.is_active == True,
+                Transcript.published_date >= start_date,
+                Transcript.published_date <= end_date
+            )
+            .order_by(Transcript.published_date.desc())
+        )
+        
+        results = query.all()
+        
+        return [
+            {
+                'id': r.id,
+                'subject': r.subject,
+                'title': r.title,
+                'description': r.description,
+                'category': r.category,
+                'transcript_id': r.transcript_id,
+                'published_date': r.published_date,
+                'transcript_title': r.transcript_title,
+                'quarter': r.quarter
+            }
+            for r in results
+        ]
+        
+    except SQLAlchemyError as e:
+        st.error(f"Error fetching key developments: {str(e)}")
+        return []
+    finally:
+        session.close()
+
 # BM25 search implementation using rank-bm25
 def preprocess_text(text: str) -> List[str]:
     """
@@ -231,8 +286,8 @@ def preprocess_text(text: str) -> List[str]:
     
     return processed_tokens
 
-def build_search_corpus(key_issues: List[Dict[str, Any]], hypotheses: List[Dict[str, Any]]) -> Tuple[List[str], List[Dict[str, Any]], BM25Okapi]:
-    """Build BM25 corpus from key issues and hypotheses"""
+def build_search_corpus(key_issues: List[Dict[str, Any]], hypotheses: List[Dict[str, Any]], key_developments: List[Dict[str, Any]]) -> Tuple[List[str], List[Dict[str, Any]], BM25Okapi]:
+    """Build BM25 corpus from key issues, hypotheses, and key developments"""
     corpus_texts = []
     corpus_items = []
     
@@ -247,6 +302,12 @@ def build_search_corpus(key_issues: List[Dict[str, Any]], hypotheses: List[Dict[
         searchable_text = f"{hypothesis.get('title', '')} {hypothesis.get('reasoning', '')}"
         corpus_texts.append(searchable_text.strip())
         corpus_items.append({**hypothesis, 'type': 'hypothesis'})
+    
+    # Add key developments to corpus
+    for development in key_developments:
+        searchable_text = f"{development.get('subject', '')} {development.get('title', '')} {development.get('description', '')} {development.get('category', '')}"
+        corpus_texts.append(searchable_text.strip())
+        corpus_items.append({**development, 'type': 'key_development'})
     
     # Preprocess corpus with full text processing pipeline
     tokenized_corpus = [preprocess_text(text) for text in corpus_texts]
@@ -263,21 +324,21 @@ def build_search_corpus(key_issues: List[Dict[str, Any]], hypotheses: List[Dict[
     
     return corpus_texts, corpus_items, bm25
 
-def rerank_with_bm25(key_issues: List[Dict[str, Any]], hypotheses: List[Dict[str, Any]], query: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """Rerank all key issues and hypotheses using BM25 scores"""
+def rerank_with_bm25(key_issues: List[Dict[str, Any]], hypotheses: List[Dict[str, Any]], key_developments: List[Dict[str, Any]], query: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Rerank all key issues, hypotheses, and key developments using BM25 scores"""
     if not query.strip():
-        return key_issues, hypotheses
+        return key_issues, hypotheses, key_developments
     
-    if not key_issues and not hypotheses:
-        return [], []
+    if not key_issues and not hypotheses and not key_developments:
+        return [], [], []
     
     # Build corpus and BM25 index
-    corpus_texts, corpus_items, bm25 = build_search_corpus(key_issues, hypotheses)
+    _, corpus_items, bm25 = build_search_corpus(key_issues, hypotheses, key_developments)
     
     # Preprocess query with same pipeline as corpus
     query_tokens = preprocess_text(query)
     if not query_tokens:
-        return key_issues, hypotheses
+        return key_issues, hypotheses, key_developments
     
     # Get BM25 scores for ALL documents
     scores = bm25.get_scores(query_tokens)
@@ -285,6 +346,7 @@ def rerank_with_bm25(key_issues: List[Dict[str, Any]], hypotheses: List[Dict[str
     # Add scores to all items and separate by type
     scored_key_issues = []
     scored_hypotheses = []
+    scored_key_developments = []
     
     for item, score in zip(corpus_items, scores):
         item_copy = item.copy()
@@ -293,15 +355,19 @@ def rerank_with_bm25(key_issues: List[Dict[str, Any]], hypotheses: List[Dict[str
         if item['type'] == 'key_issue':
             del item_copy['type']
             scored_key_issues.append(item_copy)
-        else:  # hypothesis
+        elif item['type'] == 'hypothesis':
             del item_copy['type']
             scored_hypotheses.append(item_copy)
+        else:  # key_development
+            del item_copy['type']
+            scored_key_developments.append(item_copy)
     
     # Sort ALL by score descending (highest relevance first)
     scored_key_issues.sort(key=lambda x: x['search_score'], reverse=True)
     scored_hypotheses.sort(key=lambda x: x['search_score'], reverse=True)
+    scored_key_developments.sort(key=lambda x: x['search_score'], reverse=True)
     
-    return scored_key_issues, scored_hypotheses
+    return scored_key_issues, scored_hypotheses, scored_key_developments
 
 def main():
     """Main Streamlit application"""
@@ -330,24 +396,24 @@ def main():
         # Date selection
         st.subheader("Date Ranges")
         
-        # Key Issues date range
-        st.markdown("**Key Issues Date Range**")
-        key_issues_col1, key_issues_col2 = st.columns(2)
+        # Transcript date range (for Key Issues and Key Developments)
+        st.markdown("**Transcript Date Range**")
+        transcript_col1, transcript_col2 = st.columns(2)
         
-        with key_issues_col1:
-            key_issues_start = st.date_input(
+        with transcript_col1:
+            transcript_start = st.date_input(
                 "From",
                 value=date.today() - timedelta(days=180),
-                key="key_issues_start",
-                help="Start date for Key Issues"
+                key="transcript_start",
+                help="Start date for Key Issues and Key Developments"
             )
         
-        with key_issues_col2:
-            key_issues_end = st.date_input(
+        with transcript_col2:
+            transcript_end = st.date_input(
                 "To",
                 value=date.today(),
-                key="key_issues_end",
-                help="End date for Key Issues"
+                key="transcript_end",
+                help="End date for Key Issues and Key Developments"
             )
         
         # Hypotheses date range
@@ -371,8 +437,8 @@ def main():
             )
         
         # Validation
-        if key_issues_start > key_issues_end:
-            st.error("Key Issues start date must be before end date")
+        if transcript_start > transcript_end:
+            st.error("Transcript start date must be before end date")
         if hypotheses_start > hypotheses_end:
             st.error("Hypotheses start date must be before end date")
     
@@ -380,7 +446,7 @@ def main():
     st.header(f"📊 {company_name} ({company_ticker})")
     
     # Check if date ranges are valid
-    dates_valid = (key_issues_start <= key_issues_end) and (hypotheses_start <= hypotheses_end)
+    dates_valid = (transcript_start <= transcript_end) and (hypotheses_start <= hypotheses_end)
     
     if not dates_valid:
         st.warning("⚠️ Please fix the date range errors in the sidebar before viewing data.")
@@ -389,36 +455,38 @@ def main():
     # Search bar
     st.subheader("🔍 Search")
     search_query = st.text_input(
-        "Search in Key Issues and Hypotheses",
+        "Search in Key Issues, Hypotheses, and Key Developments",
         placeholder="e.g., tariff, revenue, guidance, AI, margin...",
         help="BM25 reranking: Shows ALL items ranked by relevance. Most relevant items appear first. Preprocessing includes lemmatization (tariffs→tariff, growing→growth)."
     )
     
     # Load data
     with st.spinner("Loading data..."):
-        key_issues = get_key_issues(company_id, key_issues_start, key_issues_end)
+        key_issues = get_key_issues(company_id, transcript_start, transcript_end)
         hypotheses = get_hypotheses(company_id, hypotheses_start, hypotheses_end)
+        key_developments = get_key_developments(company_id, transcript_start, transcript_end)
     
     # Apply BM25 reranking
     if search_query.strip():
-        key_issues, hypotheses = rerank_with_bm25(key_issues, hypotheses, search_query)
+        key_issues, hypotheses, key_developments = rerank_with_bm25(key_issues, hypotheses, key_developments, search_query)
         
         # Count items with positive scores
         relevant_key_issues = sum(1 for item in key_issues if item.get('search_score', 0) > 0)
         relevant_hypotheses = sum(1 for item in hypotheses if item.get('search_score', 0) > 0)
+        relevant_key_developments = sum(1 for item in key_developments if item.get('search_score', 0) > 0)
         
-        if relevant_key_issues > 0 or relevant_hypotheses > 0:
-            st.success(f"🔍 Reranked by relevance for: **{search_query}** - {relevant_key_issues} relevant key issues, {relevant_hypotheses} relevant hypotheses (BM25 scores)")
+        if relevant_key_issues > 0 or relevant_hypotheses > 0 or relevant_key_developments > 0:
+            st.success(f"🔍 Reranked by relevance for: **{search_query}** - {relevant_key_issues} relevant key issues, {relevant_hypotheses} relevant hypotheses, {relevant_key_developments} relevant key developments (BM25 scores)")
         else:
-            st.info(f"🔍 No highly relevant matches for: **{search_query}**, but showing all {len(key_issues)} key issues and {len(hypotheses)} hypotheses ranked by relevance.")
+            st.info(f"🔍 No highly relevant matches for: **{search_query}**, but showing all {len(key_issues)} key issues, {len(hypotheses)} hypotheses, and {len(key_developments)} key developments ranked by relevance.")
             st.caption("💡 Items with score 0.0 have no matching terms but are still shown for completeness.")
     
     # Create tabs
-    tab1, tab2 = st.tabs(["🔍 Key Issues", "💡 Hypotheses"])
+    tab1, tab2, tab3 = st.tabs(["🔍 Key Issues", "💡 Hypotheses", "📈 Key Developments"])
     
     with tab1:
         # Show current date range
-        st.caption(f"📅 {key_issues_start.strftime('%Y-%m-%d')} to {key_issues_end.strftime('%Y-%m-%d')}")
+        st.caption(f"📅 {transcript_start.strftime('%Y-%m-%d')} to {transcript_end.strftime('%Y-%m-%d')}")
         
         if key_issues:
             if search_query.strip():
@@ -524,9 +592,59 @@ def main():
             else:
                 st.info("No hypotheses found for the selected time period")
     
+    with tab3:
+        # Show current date range
+        st.caption(f"📅 {transcript_start.strftime('%Y-%m-%d')} to {transcript_end.strftime('%Y-%m-%d')}")
+        
+        if key_developments:
+            if search_query.strip():
+                relevant_count = sum(1 for item in key_developments if item.get('search_score', 0) > 0)
+                st.success(f"Showing {len(key_developments)} key developments ranked by relevance ({relevant_count} with positive scores)")
+            else:
+                st.success(f"Found {len(key_developments)} key developments")
+            
+            for development in key_developments:
+                dev_date = development['published_date'].strftime('%Y-%m-%d')
+                dev_url = f"https://app.intrinsica.ai/conference_insights/{development['transcript_id']}/?element_id=development-{development['id']}"
+                dev_title = development['title'] or development['subject'] or 'Untitled'
+                
+                # Show search score if available
+                score_text = ""
+                if 'search_score' in development:
+                    score = development['search_score']
+                    if score > 0:
+                        score_text = f" (Relevance: {score:.2f})"
+                    else:
+                        score_text = f" (No match: {score:.2f})"
+                
+                with st.expander(f"**{dev_title}** [{dev_date}]{score_text}"):
+                    # Add hyperlink at the top of the expanded content
+                    st.markdown(f"🔗 [**View in Conference Insights**]({dev_url})")
+                    st.markdown("---")
+                    
+                    st.markdown(f"**Transcript**: {development['transcript_title']}")
+                    st.markdown(f"**Quarter**: {development['quarter']}")
+                    
+                    if development['subject']:
+                        st.markdown("**Subject:**")
+                        st.write(development['subject'])
+                    
+                    if development['description']:
+                        st.markdown("**Description:**")
+                        st.write(development['description'])
+                    
+                    if development['category']:
+                        st.markdown("**Category:**")
+                        st.write(development['category'])
+        else:
+            if search_query.strip():
+                st.info("No key developments found matching your search criteria")
+            else:
+                st.info("No key developments found for the selected time period")
+    
     # Footer
     st.markdown("---")
-    st.markdown("💡 *Select a company and date to explore key issues and hypotheses*")
+    st.markdown("💡 *Select a company and date to explore key issues, hypotheses, and key developments*")
 
 if __name__ == "__main__":
     main()

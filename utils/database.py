@@ -63,6 +63,10 @@ class Hypothesis(BaseWithTimeStamp):
 class TranscriptKeyDevelopment(BaseWithTimeStamp):
     __tablename__ = "transcript_key_developments"
     conference_insights_report_id = Column(Integer, ForeignKey("conference_insights_reports.id", ondelete="CASCADE"))
+    subject = Column(TEXT)
+    title = Column(TEXT)
+    description = Column(TEXT)
+    category = Column(TEXT)
 
 class PublishedRadarReport(BaseWithTimeStamp):
     __tablename__ = "published_radar_reports"
