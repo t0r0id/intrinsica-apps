@@ -53,3 +53,19 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+
+# Data directories (optional - uncomment if you want to exclude data generation artifacts)
+# data/downloads/
+# data/cache/
+
+# Large files that might be generated locally
+*.large
+*.dump
+
+# Model checkpoints and training artifacts
+checkpoints/
+runs/
+lightning_logs/
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints
