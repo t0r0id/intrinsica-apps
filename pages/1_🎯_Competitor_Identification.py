@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 import pandas as pd
 from scipy.stats import norm
 from utils.auth import check_authentication
-from utils.data_loader import load_data_files, check_data_availability, get_total_download_size
+from utils.data_loader import load_data_files
 
 # Check authentication
 if not check_authentication():
@@ -394,13 +394,6 @@ def main():
             - Semantic: Embedding-based similarity
             - Combined using configurable weights
             """)
-    
-    # Check data availability and show download info if needed
-    data_availability = check_data_availability()
-    if not all(data_availability.values()):
-        download_size = get_total_download_size()
-        st.info(f"📥 Data files will be downloaded from GitHub Releases (~{download_size:.1f} MB)")
-        st.info("Files will be cached locally after the first download.")
     
     try:
         with st.spinner("Loading data files..."):

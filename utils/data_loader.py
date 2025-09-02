@@ -139,9 +139,7 @@ def load_data_files() -> Tuple[Dict[str, Any], Any]:
         
         # Check if file exists and is valid
         if not verify_file(file_path, config.get("expected_size")):
-            st.info(f"📥 {config['description']} not found locally. Downloading from GitHub Releases...")
-            
-            # Download the file
+            # Download the file silently
             if not download_file(config["url"], file_path, config["description"]):
                 st.error(f"Failed to download {filename}. Please check your internet connection and try again.")
                 st.stop()
@@ -153,7 +151,7 @@ def load_data_files() -> Tuple[Dict[str, Any], Any]:
                 file_path.unlink(missing_ok=True)
                 st.stop()
             
-            st.success(f"✅ Successfully downloaded {config['description']}")
+            # Download completed successfully - no status message needed
     
     # Load the data files
     combined_path = data_dir / "all_documents_with_embeddings.pkl"
