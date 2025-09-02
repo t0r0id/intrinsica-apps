@@ -54,6 +54,10 @@ Thumbs.db
 *.tmp
 *.temp
 
+# Data files (now downloaded from GitHub Releases)
+data/*.pkl
+data/*.pickle
+
 # Data directories (optional - uncomment if you want to exclude data generation artifacts)
 # data/downloads/
 # data/cache/

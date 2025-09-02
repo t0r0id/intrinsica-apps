@@ -13,6 +13,7 @@ import plotly.graph_objects as go
 import pandas as pd
 from scipy.stats import norm
 from utils.auth import check_authentication
+from utils.data_loader import load_data_files, check_data_availability, get_total_download_size
 
 # Check authentication
 if not check_authentication():
@@ -27,29 +28,10 @@ st.set_page_config(
 )
 
 @st.cache_data
-def load_indices(data_dir: str):
-    """Load pre-computed indices and data."""
-    data_path = Path(data_dir)
-    
-    # Try to load combined data file first (pickle for speed, then JSON)
-    combined_pkl_path = data_path / "all_documents_with_embeddings.pkl"
-    combined_json_path = data_path / "all_documents_with_embeddings.json"
-    
-    combined_path = combined_pkl_path if combined_pkl_path.exists() else combined_json_path
-    
-    if not combined_path.exists():
-        st.error("Combined data file not found!")
-        st.error("Please re-run the indexing script: python index_all_documents.py --full")
-        st.stop()
-    
-    # Load combined data
-    import json
-    if combined_path.suffix == '.pkl':
-        with open(combined_path, 'rb') as f:
-            combined_data = pickle.load(f)
-    else:
-        with open(combined_path, 'r') as f:
-            combined_data = json.load(f)
+def load_indices():
+    """Load pre-computed indices and data from GitHub Releases if needed."""
+    # Load data files (will download from GitHub Releases if not present)
+    combined_data, bm25_index = load_data_files()
     
     # Extract documents, embeddings, and tokenized texts
     all_documents = []
@@ -84,16 +66,6 @@ def load_indices(data_dir: str):
     # Convert embeddings to numpy array
     embeddings = np.array(embeddings_list)
     
-    # Load BM25 index
-    bm25_path = data_path / "bm25_index.pkl"
-    if not bm25_path.exists():
-        st.error("BM25 index not found!")
-        st.error("Please re-run the indexing script: python index_all_documents.py --full")
-        st.stop()
-    
-    with open(bm25_path, 'rb') as f:
-        bm25_index = pickle.load(f)
-    
     # Create processed_data dictionary
     processed_data = {
         'all_documents': all_documents,
@@ -105,12 +77,12 @@ def load_indices(data_dir: str):
     # Validate data consistency
     if len(embeddings) != len(all_documents):
         st.error(f"Data inconsistency detected! Embeddings: {len(embeddings)}, Documents: {len(all_documents)}")
-        st.error("Please re-run the indexing script: python index_all_documents.py --full")
+        st.error("Data files may be corrupted. Please clear cache and refresh.")
         st.stop()
     
     if len(tokenized_texts) != len(all_documents):
         st.error(f"Data inconsistency detected! Tokenized texts: {len(tokenized_texts)}, Documents: {len(all_documents)}")
-        st.error("Please re-run the indexing script: python index_all_documents.py --full")
+        st.error("Data files may be corrupted. Please clear cache and refresh.")
         st.stop()
     
     return embeddings, bm25_index, processed_data
@@ -423,29 +395,16 @@ def main():
             - Combined using configurable weights
             """)
     
-    # Load data
-    data_dir = Path(__file__).parent.parent / "data"
-    
-    # Check if index files exist (check for either pickle or json format)
-    combined_exists = (data_dir / "all_documents_with_embeddings.pkl").exists() or \
-                     (data_dir / "all_documents_with_embeddings.json").exists()
-    bm25_exists = (data_dir / "bm25_index.pkl").exists()
-    
-    if not combined_exists or not bm25_exists:
-        st.error("❌ Index files not found!")
-        missing = []
-        if not combined_exists:
-            missing.append("all_documents_with_embeddings.pkl/json")
-        if not bm25_exists:
-            missing.append("bm25_index.pkl")
-        st.error(f"Missing files: {', '.join(missing)}")
-        st.info("Please run the indexing script first:")
-        st.code("cd experiments/graph\npython index_business_units.py", language="bash")
-        st.stop()
+    # Check data availability and show download info if needed
+    data_availability = check_data_availability()
+    if not all(data_availability.values()):
+        download_size = get_total_download_size()
+        st.info(f"📥 Data files will be downloaded from GitHub Releases (~{download_size:.1f} MB)")
+        st.info("Files will be cached locally after the first download.")
     
     try:
-        with st.spinner("Loading indices and data..."):
-            embeddings, bm25_index, processed_data = load_indices(str(data_dir))
+        with st.spinner("Loading data files..."):
+            embeddings, bm25_index, processed_data = load_indices()
             all_documents = processed_data['all_documents']
             business_units = processed_data['business_units']
             raw_10k_docs = processed_data['10k_documents']
