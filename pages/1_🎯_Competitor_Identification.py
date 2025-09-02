@@ -105,7 +105,6 @@ def normalize_scores_min_max(scores: np.ndarray) -> np.ndarray:
     
     min, max = scores.min(), scores.max()
     normalized = (scores-min)/(max-min)
-
     return normalized
 
 def normalize_scores_zdist(scores: np.ndarray) -> np.ndarray:
@@ -173,11 +172,12 @@ def get_similarity_scores(
         # Get scores only for target units
         target_bm25 = all_bm25_scores[target_indices]
         target_semantic = all_semantic_scores[target_indices]
+
         
         # Normalize scores if we have multiple targets
         if len(target_indices) > 1:
-            target_bm25_norm = normalize_scores_min_max(target_bm25, )
-            target_semantic_norm = normalize_scores_zdist(target_semantic)
+            target_bm25_norm = normalize_scores_min_max(target_bm25)
+            target_semantic_norm = normalize_scores_min_max(target_semantic)
         else:
             # Single target - use min-max normalization
             target_bm25_norm = target_bm25 / (np.max(target_bm25) + 1e-10)
@@ -185,7 +185,6 @@ def get_similarity_scores(
         
         # Combine scores
         combined = (bm25_weight * target_bm25_norm) + (semantic_weight * target_semantic_norm)
-        
         
         combined_scores.append(combined.tolist())
         bm25_normalized_scores.append(target_bm25_norm.tolist())
@@ -207,11 +206,9 @@ def find_competitors(
     semantic_weight: float = 0.3
 ) -> pd.DataFrame:
     """Find competitors using hybrid search."""
-    # Get source company ticker
-    source_ticker = documents[query_unit_idx]['ticker']
     
     # Get target units (all units except those from source company)
-    target_indices = [i for i, doc in enumerate(documents) if doc['ticker'] != source_ticker]
+    target_indices = [i for i, doc in enumerate(documents) if doc['ticker'] != documents[query_unit_idx]['ticker']]
     
     # Get similarity scores using the new method
     # Source: [query_unit_idx], Targets: all units except source company
@@ -261,7 +258,6 @@ def find_company_competitors(
     semantic_weight: float = 0.3
 ) -> pd.DataFrame:
     """Find company-level competitors by computing average best match scores."""
-    
     # Filter documents by type
     filtered_documents = [doc for doc in documents if doc.get('document_type') == document_type]
     doc_to_original_idx = {i: documents.index(doc) for i, doc in enumerate(filtered_documents)}
