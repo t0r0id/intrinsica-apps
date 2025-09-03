@@ -176,8 +176,8 @@ def get_similarity_scores(
         
         # Normalize scores if we have multiple targets
         if len(target_indices) > 1:
-            target_bm25_norm = normalize_scores_min_max(target_bm25)
-            target_semantic_norm = normalize_scores_min_max(target_semantic)
+            target_bm25_norm = normalize_scores_zdist(target_bm25)
+            target_semantic_norm = target_semantic
         else:
             # Single target - use min-max normalization
             target_bm25_norm = target_bm25 / (np.max(target_bm25) + 1e-10)
@@ -208,7 +208,7 @@ def find_competitors(
     """Find competitors using hybrid search."""
     
     # Get target units (all units except those from source company)
-    target_indices = [i for i, doc in enumerate(documents) if doc['ticker'] != documents[query_unit_idx]['ticker']]
+    target_indices = [i for i, doc in enumerate(documents) if doc['ticker'] != documents[query_unit_idx]['ticker'] or i != query_unit_idx]
     
     # Get similarity scores using the new method
     # Source: [query_unit_idx], Targets: all units except source company
@@ -269,7 +269,7 @@ def find_company_competitors(
         return pd.DataFrame()
     
     # Get all target documents (excluding source company)
-    target_indices = [doc_to_original_idx[i] for i, doc in enumerate(filtered_documents) if doc['ticker'] != source_company]
+    target_indices = [doc_to_original_idx[i] for i, doc in enumerate(filtered_documents)]
     
     if not target_indices:
         return pd.DataFrame()
