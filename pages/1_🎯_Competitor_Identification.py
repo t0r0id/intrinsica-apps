@@ -340,7 +340,9 @@ def find_company_competitors(
                 source_weights.append(documents[src_idx].get('importance_weight', 100))
                 matched_pairs.append({
                     'source': documents[src_idx]['name'],
+                    'source_details': documents[src_idx].get('details', ''),
                     'target': documents[best_target_idx]['name'],
+                    'target_details': documents[best_target_idx].get('details', ''),
                     'score': best_score
                 })
         
@@ -624,17 +626,48 @@ def main():
                         with st.expander(f"**{row['display_name']}** - Average Score: {row['final_score']:.3f}"):
                             st.markdown(f"**Matched {row['num_matches']} business unit pairs**")
                             
-                            # Show matched pairs
+                            # Show matched pairs with descriptions
                             if 'matched_pairs' in row and row['matched_pairs']:
                                 pairs_df = pd.DataFrame(row['matched_pairs'])
-                                pairs_df['score'] = pairs_df['score'].apply(lambda x: f"{x:.3f}")
-                                pairs_df.columns = ['Source Business Unit', 'Best Match', 'Score']
-                                st.dataframe(pairs_df, use_container_width=True, hide_index=True)
+
+                                # Create columns with expandable descriptions
+                                for idx, pair in pairs_df.iterrows():
+                                    with st.container(border=True):
+                                        # Display the match header with score
+                                        col1, col2, col3 = st.columns([2, 2, 1])
+                                        with col1:
+                                            st.markdown(f"**Source:** {pair['source']}")
+                                        with col2:
+                                            st.markdown(f"**Target:** {pair['target']}")
+                                        with col3:
+                                            st.markdown(f"**Score:** {pair['score']:.3f}")
+
+                                        # Create expandable sections for full descriptions
+                                        with st.expander("View Full Descriptions"):
+                                            col_src, col_tgt = st.columns(2)
+                                            with col_src:
+                                                st.markdown("**Source Description:**")
+                                                with st.container(height=200, border=True):
+                                                    st.markdown(pair.get('source_details', 'No description available'))
+                                            with col_tgt:
+                                                st.markdown("**Target Description:**")
+                                                with st.container(height=200, border=True):
+                                                    st.markdown(pair.get('target_details', 'No description available'))
                             
                 else:
                     # Unit detailed view
+                    # Get source unit details
+                    source_unit_details = all_documents[selected_doc_idx].get('details', '')
+
                     for _, row in top_results.iterrows():
                         with st.expander(f"**{row['display_name']}** - Score: {row['final_score']:.3f}"):
+                            # Add source business unit description at the top
+                            st.markdown("**Source Business Unit Description:**")
+                            with st.container(height=150, border=True):
+                                st.markdown(source_unit_details)
+
+                            st.markdown("---")
+
                             col1, col2, col3 = st.columns(3)
                             with col1:
                                 st.metric("BM25 Score", f"{row['bm25_score']:.3f}")
@@ -642,12 +675,12 @@ def main():
                                 st.metric("Semantic Score", f"{row['semantic_score']:.3f}")
                             with col3:
                                 st.metric("Final Score", f"{row['final_score']:.3f}")
-                            
-                            st.markdown("**Business Unit Description:**")
-                            
+
+                            st.markdown("**Target Business Unit Description:**")
+
                             # Create a scrollable container with proper markdown rendering
                             # Using container with height constraint
-                            with st.container(height=200, border=True):
+                            with st.container(height=150, border=True):
                                 st.markdown(row['details'])
             
             # Score distribution - only show for unit-level search
