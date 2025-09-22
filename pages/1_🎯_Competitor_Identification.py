@@ -28,10 +28,13 @@ st.set_page_config(
 )
 
 @st.cache_data
-def load_indices():
+def load_indices(data_version: str = "v1"):
     """Load pre-computed indices and data from GitHub Releases if needed."""
     # Load data files (will download from GitHub Releases if not present)
-    combined_data, bm25_index = load_data_files()
+    if data_version == "v2":
+        combined_data, bm25_index = load_data_files("v2")
+    else:
+        combined_data, bm25_index = load_data_files()
     
     # Extract documents, embeddings, and tokenized texts
     all_documents = []
@@ -206,10 +209,10 @@ def find_competitors(
     semantic_weight: float = 0.3
 ) -> pd.DataFrame:
     """Find competitors using hybrid search."""
-    
+
     # Get target units (all units except those from source company)
-    target_indices = [i for i, doc in enumerate(documents) if doc['ticker'] != documents[query_unit_idx]['ticker'] or i != query_unit_idx]
-    
+    target_indices = [i for i, doc in enumerate(documents) if doc['ticker'] != documents[query_unit_idx]['ticker']]
+
     # Get similarity scores using the new method
     # Source: [query_unit_idx], Targets: all units except source company
     similarity_results = get_similarity_scores(
@@ -221,17 +224,17 @@ def find_competitors(
         bm25_weight=bm25_weight,
         semantic_weight=semantic_weight,
     )
-    
+
     # Extract scores for the single source unit (first and only row)
     final_scores = similarity_results['combined'][0]
     bm25_norm = similarity_results['bm25_normalized'][0]
     semantic_norm = similarity_results['semantic_normalized'][0]
-    
-    # Create results dataframe
-    results = []
+
+    # Create results dataframe with all units
+    all_results = []
     for idx, target_idx in enumerate(target_indices):
         doc = documents[target_idx]
-        results.append({
+        all_results.append({
             'display_name': doc['display_name'],
             'ticker': doc['ticker'],
             'name': doc['name'],
@@ -240,11 +243,21 @@ def find_competitors(
             'final_score': final_scores[idx],
             'details': doc['details']  # Store full details
         })
-    
-    # Sort by final score
-    results_df = pd.DataFrame(results)
+
+    # Convert to DataFrame for easier manipulation
+    all_results_df = pd.DataFrame(all_results)
+
+    # Group by company ticker and keep only the best scoring unit per company
+    best_per_company = []
+    for ticker, group in all_results_df.groupby('ticker'):
+        # Get the row with highest final_score for this company
+        best_unit = group.loc[group['final_score'].idxmax()]
+        best_per_company.append(best_unit)
+
+    # Create final results dataframe
+    results_df = pd.DataFrame(best_per_company)
     results_df = results_df.sort_values('final_score', ascending=False)
-    
+
     return results_df
 
 def find_company_competitors(
@@ -367,13 +380,21 @@ def main():
     # Sidebar for configuration
     with st.sidebar:
         st.header("⚙️ Configuration")
-        
+
+        # Data version selection
+        st.subheader("Data Version")
+        data_version = st.selectbox(
+            "Select Data Version",
+            ["v1", "v2"],
+            help="Choose between different versions of the data"
+        )
+
         # Weights configuration
         st.subheader("Search Weights")
         bm25_weight = st.slider("BM25 Weight", 0.0, 1.0, 0.7, 0.05)
         semantic_weight = 1.0 - bm25_weight
         st.info(f"Semantic Weight: {semantic_weight:.2f}")
-        
+
         # Number of results
         top_n = st.number_input("Top N Results", min_value=5, max_value=50, value=10)
         
@@ -392,14 +413,14 @@ def main():
             """)
     
     try:
-        with st.spinner("Loading data files..."):
-            embeddings, bm25_index, processed_data = load_indices()
+        with st.spinner(f"Loading data files (Version: {data_version})..."):
+            embeddings, bm25_index, processed_data = load_indices(data_version)
             all_documents = processed_data['all_documents']
             business_units = processed_data['business_units']
             raw_10k_docs = processed_data['10k_documents']
             tokenized_texts = processed_data['tokenized_texts']
-        
-        st.success(f"✅ Loaded {len(all_documents)} documents ({len(business_units)} business units, {len(raw_10k_docs)} 10K docs) from {len(set([d['ticker'] for d in all_documents]))} companies")
+
+        st.success(f"✅ Loaded {len(all_documents)} documents ({len(business_units)} business units, {len(raw_10k_docs)} 10K docs) from {len(set([d['ticker'] for d in all_documents]))} companies (Version: {data_version})")
         
     except Exception as e:
         st.error(f"Error loading data: {str(e)}")
